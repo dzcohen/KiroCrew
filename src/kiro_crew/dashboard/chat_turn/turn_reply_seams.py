@@ -1,6 +1,7 @@
 """What a dashboard turn writes as its reply: the partial reply a dying turn persists, the
-abnormal end's usage row, the text and thinking stream flushes, the steer's segment cut, and the
-error rows the stream watchdogs post."""
+abnormal end's usage row, the text and thinking stream flushes, the segment cut at a tool call or
+an approval prompt and the run it holds across it, the steer's segment cut, and the error rows the
+stream watchdogs post."""
 
 from __future__ import annotations
 
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
         logger,
         provider_last_turn_usage,
         read_turn_model,
+        redact,
+        reflow_and_label_glued_option_marker,
         save_slot_off_loop,
         slot_history_key,
     )
@@ -24,6 +27,9 @@ if TYPE_CHECKING:
     from kiro_crew.dashboard.chat_turn.segment_flush import (
         _cleared_segment_text,
         _flush_segment,
+        _give_back_run,
+        _hold_segment_tail,
+        _open_segment_with,
         _redact_segment,
         _segment_row_meta,
     )
@@ -82,6 +88,10 @@ async def _persist_partial_reply(turn, reason: str = "") -> None:
     # ``_reply_flushed``: the end-of-turn flush already saved this text and
     # leaves it in ``assistant_text``, so a cancel landing after it (a late
     # Stop, the turn ceiling's task cancel) must not save it a second time.
+    #
+    # A run the live stream held at the turn's last display boundary is
+    # settled first: back on its row, or into this text when it is part of it.
+    _drop_wire_tail(turn)
     if turn.assistant_text and not turn._reply_flushed:
         slot.purge_chunks()
         # Same glued-marker repair and whole-text redaction as
@@ -263,7 +273,8 @@ def _flush_text_stream(turn) -> None:
     _wsred = turn._wsred
     slot = turn.slot
     state = turn.state
-    wire = _wsred.flush()
+    continued = _held_continued(turn)
+    wire = _settle_held(turn, _wsred.flush(), continued=continued)
     if not wire:
         return
     _ttft_visible.mark(wire)
@@ -280,6 +291,94 @@ def _flush_text_stream(turn) -> None:
         "chat_chunk",
         {"slot": slot.key, "content": wire, "seq": turn.chunk_seq, "gen": chunk_generation()},
     )
+
+
+# A tool call or an approval prompt is a display boundary INSIDE the reply, not
+# its end: the text after it can finish a credential the text before it began,
+# and two redaction windows cut there emit and save both halves unmatched. So
+# the cut there (_cut_segment) leaves the run _wsred still withholds in the
+# redactor, where the next text joins it, and off the row it was cut from. The
+# first output that holds the run settles it (_settle_held): out whole and
+# unchanged it is a word of its own and goes back on its row; otherwise it opens
+# the segment it continued into and is saved with it, redacted as one text. One
+# entry per cut crossed before that output (``turn._held_runs``) -- the row, the
+# raw run cut off it, and the variant the row showed then -- so a run held over
+# several cuts goes back piece by piece. The Slack stream carries its held run
+# across a `wait` the same way (slack/handler_runtime/stream.py: move_back,
+# _give_back).
+
+
+def _held_continued(turn) -> bool:
+    """Whether text reached _wsred after the run it holds for a boundary."""
+    _wsred = turn._wsred
+    held = "".join(run for _, run, _ in turn._held_runs)
+    return bool(held) and (_wsred.discarding or _wsred.held != held)
+
+
+def _settle_held(turn, wire: str, *, continued: bool) -> str:
+    """Settle the run held at a boundary against *wire*, the redactor's next
+    output, and return what is left of *wire* for the current segment.
+    *continued* says whether text after the boundary is in *wire* as well."""
+    slot = turn.slot
+    state = turn.state
+    if not turn._held_runs:
+        return wire
+    held = list(turn._held_runs)
+    turn._held_runs.clear()
+    run = "".join(piece for _, piece, _ in held)
+    if wire.startswith(run) and redact(wire) == wire:
+        for row, piece, variant_idx in held:
+            _give_back_run(state, slot, row, piece, variant_idx)
+        return wire[len(run) :]
+    if not continued:
+        # Nothing followed the run, so what it redacts to is its own row's.
+        row, _, variant_idx = held[0]
+        _give_back_run(state, slot, row, wire, variant_idx)
+        return ""
+    turn.assistant_text = _open_segment_with(slot, turn.assistant_text, run)
+    return wire
+
+
+def _cut_segment(turn, *, broadcast: bool = True) -> None:
+    """Finalize the accumulated text as a segment at a display boundary inside
+    the reply, holding back the run _wsred still withholds (see _held_runs).
+
+    Held only while the whole segment saves that run as it was written: a run
+    the segment already redacts ends a value it holds whole, so the window
+    ends here as it does at the reply's end."""
+    _wsred = turn._wsred
+    slot = turn.slot
+    state = turn.state
+    run = "" if _wsred.discarding else _wsred.held
+    before = "".join(piece for _, piece, _ in turn._held_runs)
+    own = run[len(before) :] if run.startswith(before) else ""
+    raw = slot.segment_raw_text
+    kept = None
+    if (
+        own
+        and raw is not None
+        and redact(reflow_and_label_glued_option_marker(raw)[0]).endswith(own)
+    ):
+        kept = _hold_segment_tail(slot, turn.assistant_text, own)
+    if kept is None:
+        if not _wsred.discarding:
+            _flush_text_stream(turn)
+        _flush_segment(state, slot, turn.assistant_text, broadcast=broadcast)
+    else:
+        row = _flush_segment(state, slot, kept, broadcast=broadcast)
+        turn._held_runs.append((row, own, row.get("variant_idx")))
+    turn.assistant_text = _cleared_segment_text(slot)
+
+
+def _drop_wire_tail(turn) -> None:
+    """Discard what _wsred withholds without streaming it, settling a run it
+    holds for a boundary first. Call it BEFORE the segment it drops is
+    cleared, so a run that belongs to that segment is dropped with it."""
+    _wsred = turn._wsred
+    if turn._held_runs:
+        continued = _held_continued(turn)
+        _settle_held(turn, _wsred.flush(), continued=continued)
+    _wsred.reset()
 
 
 def _flush_thinking_stream(turn) -> None:
@@ -322,7 +421,6 @@ def _steer_segment_cut(turn, *, interrupted: bool = True) -> None:
     Sync on purpose — the handler and this turn share the event loop, so
     the flush cannot interleave with chunk processing.
     """
-    _wsred = turn._wsred
     slot = turn.slot
     state = turn.state
     # Drop the wire redactor's withheld tail instead of emitting it: a
@@ -330,8 +428,9 @@ def _steer_segment_cut(turn, *, interrupted: bool = True) -> None:
     # streaming message at the steer boundary, opening a phantom streaming
     # bubble below the steer card. No text is lost — assistant_text
     # accumulates the full segment independently of the wire buffer, and
-    # _flush_segment persists (and re-redacts) that full text.
-    _wsred.reset()
+    # _flush_segment persists (and re-redacts) that full text. A run held at
+    # an earlier tool call is settled into its row or into this segment.
+    _drop_wire_tail(turn)
     if turn.assistant_text.strip():
         # The persisted row may hold text the redactor never broadcast (a
         # fully withheld first chunk). It is published quietly, so it is
