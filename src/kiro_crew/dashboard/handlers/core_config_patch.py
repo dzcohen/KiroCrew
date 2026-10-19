@@ -111,6 +111,7 @@ def _session_environment_key_validators() -> dict[str, Any]:
     from kiro_crew.config.session_environments import (
         validate_boxd_profiles,
         validate_default_profile,
+        validate_fargate_profiles,
         validate_kiro_cloud_profiles,
         validate_sprites_profiles,
         validate_stop_on_shutdown,
@@ -121,6 +122,7 @@ def _session_environment_key_validators() -> dict[str, Any]:
         "kiro_cloud_profiles": validate_kiro_cloud_profiles,
         "sprites_profiles": validate_sprites_profiles,
         "boxd_profiles": validate_boxd_profiles,
+        "fargate_profiles": validate_fargate_profiles,
         "stop_on_shutdown": validate_stop_on_shutdown,
     }
 

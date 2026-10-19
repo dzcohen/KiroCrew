@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_ID = "coder"
 KIRO_CLOUD_PROVIDER_ID = "kiro_cloud"
+FARGATE_PROVIDER_ID = "fargate"
 #: The providers a choice row may record. The profile id still decides the
 #: provider at launch (:func:`profile_provider`); the row says where it ran.
 CHOICE_PROVIDERS = frozenset(PROVIDER_IDS)
@@ -783,6 +784,11 @@ async def prepare_for_session(
             f"this session's profile {profile_id!r} now belongs to another provider; "
             "restore the original profile in Settings > Session Environments"
         )
+    if provider == FARGATE_PROVIDER_ID:
+        from kiro_crew.fargate_session.launch import FargateSessionEnvironments
+
+        # Keyed by the owner like Coder's, so a subagent shares the parent's task.
+        return await FargateSessionEnvironments(section, home).prepare(owner_key, profile_id)
     vm_environments = _vm_environments().get(provider)
     if vm_environments is not None:
         return await vm_environments(section, home).prepare(owner_key, profile_id)
@@ -853,6 +859,17 @@ def _has_coder_binding(home: Path, owner_key: str) -> bool:
     return WorkspaceBindingRegistry(path).get_by_session(owner_key) is not None
 
 
+def _has_fargate_task(home: Path, owner_key: str) -> bool:
+    """Whether ``owner_key`` already owns a Fargate task row; reads only, like
+    :func:`_has_coder_binding`, and an unreadable registry raises."""
+    path = home / "fargate" / "session-tasks.json"
+    if not path.exists():
+        return False
+    from kiro_crew.fargate_session.launch import SessionTaskRegistry
+
+    return SessionTaskRegistry(path).get(owner_key) is not None
+
+
 def _owned_elsewhere(home: Path, owner_key: str, provider: str) -> bool:
     """Whether ``owner_key`` owns a workspace or VM row with a provider other
     than ``provider`` (any state, an archived one included).
@@ -863,6 +880,8 @@ def _owned_elsewhere(home: Path, owner_key: str, provider: str) -> bool:
     from kiro_crew.coder.persistent_vm import SessionResourceRegistry
 
     if provider != PROVIDER_ID and _has_coder_binding(home, owner_key):
+        return True
+    if provider != FARGATE_PROVIDER_ID and _has_fargate_task(home, owner_key):
         return True
     for name, cls in _vm_environments().items():
         if name == provider:
