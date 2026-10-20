@@ -266,11 +266,23 @@ def _give_back_run(
     row's variant when the run was cut off it: a row showing another variant
     since is left as it is. The text is appended to the content the row holds
     now, which a save may have rewritten in place (an inline image's path).
+
+    *text* is also queued on the slot's delivery queue as the ``chunk`` it was
+    held back from: the /api/chat SSE stream and the OpenAI-compatible replies
+    build the reply from the chunks they drain and never see a row patch. It
+    goes on the queue only, not in the window (the row already holds it) and
+    not on the WebSocket (open tabs take the patch below).
+
+    The rebuilt content gets the glued-footer repair the row's save made: a run
+    given back after an ``[OPTIONS:]`` footer is prose glued to it.
     """
-    if not text or row.get("variant_idx") != variant_idx:
+    if not text:
+        return
+    slot.push_wire_frame("chunk", text)
+    if row.get("variant_idx") != variant_idx:
         return
     before = row.get("content") or ""
-    content = before + text
+    content = _reflow_label_and_audit(slot, before + text)
     row["content"] = content
     variants = row.get("variants")
     if (
