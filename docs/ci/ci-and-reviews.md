@@ -2092,7 +2092,15 @@ of the AUTOSDE rules; the semantic half is delegated to the line reviewers.
   summary. Last, on the merge-base diff, it requires a reader list on take-away
   diffs (`.github/scripts/take_away_check.py`, skipped for dependabot); see
   [take-away-changes.md](../system-specs/common/take-away-changes.md). All five
-  checks are blocking.
+  checks are blocking. A sixth, advisory check asks a `fix:` PR for one `Proof:` line
+  inside `## Tests` (`.github/scripts/proof_line_check.py`, run from the base ref so a
+  branch cannot weaken it): `Proof: PROVEN <tests that fail without the fix> (head
+  <sha12>)`, or `Proof: not provable -- <reason>` from a closed list. It checks
+  presence, place and shape only, so a hand-typed `PROVEN` line passes CI; locally
+  `diff_signals.py --check-body` compares it with the record `prove.py` writes for the
+  same tree and returns exit 24 once enforcing. Until `ENFORCE_FROM` in the script names
+  a date it annotates a warning and passes; after it, it fails pull requests opened on or
+  after that date.
 
 Separately, **`dependency-review.yml`** fails a PR that adds or changes a
 dependency whose license is off the curated allowlist in
