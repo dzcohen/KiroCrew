@@ -463,7 +463,54 @@ def _url_payload_command(n: int) -> str:
 #: exemption. No pass widened, no threshold moved, and the exfil URL scan is unchanged.
 #: Six more for its ``keep_sri_digests=False`` switch: a streamed segment whose delta
 #: boundary split an SRI value saves main's verdict on the digest, not the notice.
-_PACKAGE_LINE_BUDGET = 32_188
+#:
+#: Raised again, from 32,188, for the shell-expansion bypass gate (GHSA-x2m8-5ff9-f479):
+#: ``_imds_access_via_expansion`` in ``exfil.py`` with its module note refuses a dotted
+#: IMDS token one of whose octets splices a ``$(``/``${`` expansion, and the
+#: ``/dev/tcp via shell expansion`` row in ``exfil_bash.py`` refuses a ``/dev/tc``/``/dev/ud``
+#: device name carrying one. The ``/dev/`` path is anchored as ABSOLUTE and at least one
+#: literal IMDS octet is required, so all-expansion version strings and ``~/dev/tcl`` home
+#: paths are not over-blocked. No existing pattern, threshold or pass moved.
+#:
+#: Raised again, from 32,299, hardening that same gate against three review findings
+#: (GHSA-x2m8-5ff9-f479): literal octets are now read in the resolver's bases so an OCTAL
+#: (``0251``→169) or hex spelling of the fixed octets cannot walk the token past the gate;
+#: matched brackets (``_match_closers`` feeding ``_ip_expansion_tokens``, precomputed in
+#: one linear pass) span a nested ``$((100+(154)))`` whole without a quadratic re-scan; and the
+#: ``/dev/`` rule now anchors to an absolute shell word AND a ``tcp``/``udp`` device
+#: segment, so a path rooted at ``}``/``)``/``"``/``:`` or a doubled slash is not
+#: over-blocked. The token scanner also advances past an UNTERMINATED ``$(`` so it
+#: cannot hang the event loop. No existing pattern, threshold or pass moved.
+#:
+#: Raised again, from 32,393, narrowing that same gate against three more review
+#: findings (GHSA-x2m8-5ff9-f479): the IMDS rule now fires only when the first three
+#: octets are the LITERAL ``169.254.169`` prefix and the last octet is an expansion
+#: whose literal fragments can still form ``254`` (``_last_octet_can_form``), so a
+#: variable-built gateway (``${A}.${B}.${C}.254``), a link-local assignment and a
+#: ``12$((1+2))`` last octet are no longer over-blocked; the ``/dev/`` rule gained a
+#: device-closing-slash anchor so ``/dev/ud$(printf ma)buf0`` is left alone; and the
+#: duplicate octet parser is gone -- ``canonicalize_ip`` and the gate now share the
+#: one ``_octet_literal_value``. No existing exfil pattern, threshold or pass moved.
+#:
+#: Raised again, from 32,426, closing two regressions that review found in that
+#: narrowing (GHSA-x2m8-5ff9-f479): the final-octet fit now matches every spelling
+#: of 254 the resolver accepts -- decimal, octal (``0376``) and hex (``0xfe``), with
+#: bounded zero padding -- via ``_octet_spellings``/``_fragments_embed`` derived from
+#: the parser's own bases, so an alternate-base last octet (``037$(printf 6)``,
+#: ``0x$(printf fe)``) no longer walks past the gate; and the shared octet parser now
+#: runs every ``int()`` inside its try/except, so a >4,300-digit leading-zero token
+#: reads as a non-octet instead of raising. No existing pattern, threshold or pass moved.
+#:
+#: NET -14, to 32,456: a later review round replaced the per-spelling fit test with
+#: one presence check (GHSA-x2m8-5ff9-f479). The IMDS gate now blocks a literal
+#: ``169.254.169`` prefix whose LAST octet holds ANY expansion -- ``$(``, ``${``,
+#: ``$VAR`` or a backtick span -- deleting ``_octet_spellings``, ``_fragments_embed``,
+#: ``_last_octet_can_form`` and ``_MAX_OCTET_ZERO_PAD`` (one check blocks every
+#: decimal/octal/hex/zero-pad spelling and deliberately over-blocks any other
+#: expansion-built ``.x`` in the /24); ``_ip_expansion_tokens`` gained ``$VAR`` and a
+#: ``_backtick_pairs`` span, and the ``/dev/`` word-start anchor now accepts an
+#: opening quote. No existing exfil pattern, threshold or pass moved.
+_PACKAGE_LINE_BUDGET = 32_456
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

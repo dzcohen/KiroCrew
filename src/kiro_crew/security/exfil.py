@@ -1311,6 +1311,33 @@ def oauth_rejection_is_endpoint_exemptible(url: str) -> bool:
 # canonicalize_ip converts ALL these to dotted-quad for uniform matching.
 
 
+def _octet_literal_value(part: str) -> "int | None":
+    """Value of ONE literal dotted-quad octet in the OS resolver's bases, or None.
+
+    ``inet_aton`` and ``curl`` read a leading-zero octet as C-style OCTAL (``0251``
+    is 169, not 251) and ``0x`` as hex; ``int(part, 0)`` does not accept the bare
+    ``0NNN`` octal spelling, so it is handled first. Returns None for an empty or
+    non-numeric octet. This is the ONE octet parser -- ``canonicalize_ip`` and the
+    IMDS shell-expansion gate both call it, so a leading-zero or hex octet reads the
+    same way on every path.
+
+    EVERY conversion runs inside the try: a very long digit string trips CPython's
+    integer-string length limit with ValueError, and that must read as "not a
+    numeric octet" (None), never crash the gate -- the same fail-soft the inline
+    parser in ``canonicalize_ip`` had before this was extracted.
+    """
+    try:
+        if len(part) > 1 and part[0] == "0" and part[1:].isdigit():
+            # Octal only when every trailing digit is octal; a stray 8/9 is
+            # decimal, exactly as inet_aton reads it.
+            if all(c in "01234567" for c in part[1:]):
+                return int(part, 8)
+            return int(part)
+        return int(part, 0)  # decimal, or 0x-prefixed hex
+    except (ValueError, OverflowError):
+        return None
+
+
 def canonicalize_ip(s: str) -> str:
     """Convert an IP address in any encoding to dotted-quad (a.b.c.d).
 
@@ -1347,23 +1374,13 @@ def canonicalize_ip(s: str) -> str:
         octets: list[int] = []
         valid = True
         for part in parts:
-            try:
-                # Handle C-style octal (0NNN without 'o' prefix) which Python 3
-                # int(x, 0) doesn't recognize. Must check before int(x, 0).
-                if len(part) > 1 and part[0] == "0" and part[1:].isdigit():
-                    # Could be octal (0251) or just "00" etc.
-                    if all(c in "01234567" for c in part[1:]):
-                        val = int(part, 8)
-                    else:
-                        # Has 8 or 9 -- not valid octal, treat as decimal
-                        val = int(part)
-                else:
-                    # int() with base=0 handles: decimal, 0x hex
-                    val = int(part, 0)
-                octets.append(val)
-            except (ValueError, OverflowError):
+            # The ONE octet parser (reads octal/hex in the resolver's bases); None
+            # is an unparseable octet, so this candidate is not a dotted IP.
+            val = _octet_literal_value(part)
+            if val is None:
                 valid = False
                 break
+            octets.append(val)
 
         if valid:
             if len(octets) == 1:
@@ -1462,6 +1479,207 @@ _IMDS_IP = "169.254.169.254"
 # SSRF gate which also blocks it (CWE-918 dual-stack parity).
 _IMDS_IPV6 = "fd00:ec2::254"
 
+# ── IMDS via shell EXPANSION (CWE-185 / CWE-693) ──
+# The deny view deliberately stops BEFORE shell expansion (parameter ``${X}``,
+# arithmetic ``$((..))``, command ``$(..)``), so a dotted token that splices an
+# expansion into the FINAL octet -- ``169.254.169.25$((2+2))``,
+# ``169.254.169.2${X}54``, ``169.254.169.25$(printf 4)`` -- reaches this gate with
+# that octet UNEXPANDED, and the literal ``169.254.169.254`` the canonicalizer
+# looks for never appears. bash still produces the real bytes at run time.
+#
+# The gate is deliberately NARROW: it fires only when the first three octets are
+# LITERAL and equal ``169.254.169`` (read in the OS resolver's bases, so an octal
+# ``0251`` or hex ``0xA9`` spelling of the fixed octets compares correctly) AND the
+# last octet CONTAINS ANY shell expansion -- ``$(``, ``${``, ``$((``, a ``$VAR``
+# parameter or a backtick span. There is NO per-spelling fit test: once the
+# ``169.254.169`` prefix is literal, an expansion anywhere in the final octet means
+# the shell can form ``.254`` (in decimal, octal ``0376``, hex ``0xfe`` or any
+# zero-padded variant) at run time, so one presence check blocks every spelling at
+# once. This DELIBERATELY over-blocks an expansion-built address that happens to sit
+# elsewhere in ``169.254.169.0/24`` (``169.254.169.12$((1+2))``): no agent command
+# needs to build a ``169.254.169.x`` address out of an expansion, so the over-block
+# costs nothing real while the one check closes the whole alternate-spelling family.
+# Pinning the whole ``169.254.169`` prefix to literals is what keeps ordinary
+# commands out of the gate: a subnet gateway built from variables
+# (``${A}.${B}.${C}.254``), a random link-local assignment
+# (``169.254.$((RANDOM%254+1)).$((RANDOM%254+1))``) and a four-part version string
+# (``${MAJOR}.${MINOR}.${PATCH}.${BUILD}``) all lack the literal prefix and are left
+# alone. A purely LITERAL ``169.254.169.123`` carries no expansion and is left to the
+# canonicalizer path above. Only the UNEXPANDED token is examined and logged -- the
+# deny view's reason for stopping before expansion (host-dependent output, writing
+# the operator's real bytes into the audit trail) is sound and preserved here.
+#
+# Expansions are collapsed whole by matched brackets (``_match_closers`` feeding
+# ``_ip_expansion_tokens``), not a regex, so a nested ``$((100+(154)))`` or
+# ``${a${b}}`` is spanned in one piece: a non-nested regex stops at the first
+# inner paren and leaves that octet unseen, letting the token slip through. The
+# closers (and backtick pairs) are precomputed in one linear pass, so the scan stays
+# O(n) -- no backtracking, no ReDoS, and an unclosed ``$(`` or backtick is a lookup
+# miss rather than a re-scan to end of string -- and a command with no ``$``/backtick
+# marker short-circuits before the scan runs at all.
+# The dotted-quad octets of _IMDS_IP, as ints, for positional comparison.
+_IMDS_OCTETS = tuple(int(o) for o in _IMDS_IP.split("."))
+#: Collapsed-expansion sentinel: a NUL never appears in a real shell command.
+_EXPANSION_SENTINEL = "\x00"
+#: Characters of a dotted IP token (decimal, hex digits, ``x``, the dot); never ``$``.
+_IP_TOKEN_CHARS = frozenset("0123456789abcdefABCDEFxX.")
+
+
+def _match_closers(command: str) -> "dict[int, int]":
+    """Map each ``(``/``{`` index to its matching ``)``/``}`` index; closed ones only.
+
+    One linear pass with a stack per delimiter; an opener that never closes is
+    absent from the map. Precomputing this once is what keeps the token scan
+    linear: an unterminated ``$(`` is a lookup miss, not a re-scan to the end of
+    the string, so a command of many unclosed ``$(`` cannot drive the gate
+    quadratic and stall the event loop. Each opener is matched independently, so a
+    later opener still closes after an unclosed one -- ``$( ( $(x)`` records the
+    inner ``$(x)`` even though the outer ``$(`` never closes.
+    """
+    closers: dict[int, int] = {}
+    parens: list[int] = []
+    braces: list[int] = []
+    for idx, ch in enumerate(command):
+        if ch == "(":
+            parens.append(idx)
+        elif ch == ")":
+            if parens:
+                closers[parens.pop()] = idx
+        elif ch == "{":
+            braces.append(idx)
+        elif ch == "}":
+            if braces:
+                closers[braces.pop()] = idx
+    return closers
+
+
+def _backtick_pairs(command: str) -> "dict[int, int]":
+    """Map each opening backtick index to the index of the one that closes it.
+
+    Backticks do not nest, so they pair up consecutively (1st-2nd, 3rd-4th, ...).
+    An odd trailing backtick is unpaired and absent from the map. Precomputing this
+    once keeps the token scan linear: an unterminated backtick is a lookup miss,
+    not a re-scan to the end of the string.
+    """
+    pairs: dict[int, int] = {}
+    opener: "int | None" = None
+    for idx, ch in enumerate(command):
+        if ch == "`":
+            if opener is None:
+                opener = idx
+            else:
+                pairs[opener] = idx
+                opener = None
+    return pairs
+
+
+def _ip_expansion_tokens(command: str) -> "list[tuple[str, str]]":
+    """Maximal ``(original, masked)`` tokens of IP characters and whole expansions.
+
+    A token is a run of dotted-IP characters and whole shell-expansion spans: a
+    ``$(`` / ``${`` bracket span, a ``$VAR`` parameter (``$`` then a name), and a
+    backtick span. In *masked* each whole span is ONE sentinel, so an expansion
+    holding a dot (``$(printf 2.54)``) or nested parens can neither split an octet
+    nor escape the token; *original* is the unexpanded text, for the denial reason.
+    The scan is linear: each bracket/backtick span is one O(1) lookup of its
+    precomputed closer, a ``$VAR`` is a forward walk over its own name, and an
+    UNTERMINATED span (no closer) is a plain character the scan steps past, never a
+    re-scan to the end of the string.
+    """
+    closers = _match_closers(command)
+    bticks = _backtick_pairs(command)
+    n = len(command)
+
+    def expansion_end(i: int) -> "int | None":
+        """End index (exclusive) of a whole expansion starting at *i*, else None."""
+        c = command[i]
+        if c == "$" and i + 1 < n:
+            nxt = command[i + 1]
+            if nxt in "({" and (i + 1) in closers:
+                return closers[i + 1] + 1  # whole balanced $(..) / ${..} span
+            if nxt.isalpha() or nxt == "_":  # $VAR parameter
+                j = i + 2
+                while j < n and (command[j].isalnum() or command[j] == "_"):
+                    j += 1
+                return j
+        if c == "`" and i in bticks:
+            return bticks[i] + 1
+        return None
+
+    tokens: list[tuple[str, str]] = []
+    i = 0
+    while i < n:
+        if not (command[i] in _IP_TOKEN_CHARS or expansion_end(i) is not None):
+            i += 1
+            continue
+        start = i
+        masked: list[str] = []
+        while i < n:
+            end = expansion_end(i)
+            if end is not None:
+                masked.append(_EXPANSION_SENTINEL)
+                i = end  # just past this whole expansion span
+            elif command[i] in _IP_TOKEN_CHARS:
+                masked.append(command[i])
+                i += 1
+            else:
+                break
+        # A token always begins at an IP char or a CLOSED expansion, so the first
+        # inner step advances past *start*: the scan cannot stall.
+        tokens.append((command[start:i], "".join(masked)))
+    return tokens
+
+
+def _imds_access_via_expansion(command: str) -> str | None:
+    """Refuse a ``169.254.169.<octet>`` token whose LAST octet holds a shell expansion.
+
+    See the module note above. Each candidate dotted token is split into octets with
+    every whole expansion collapsed to a sentinel. The gate fires only when:
+      * the token has four dotted octets,
+      * the first three are LITERAL and equal ``169.254.169`` (read in the OS
+        resolver's bases via ``_octet_literal_value``, so an octal ``0251`` or hex
+        ``0xA9`` spelling of the fixed octets compares correctly), and
+      * the last octet CONTAINS an expansion (``$(``, ``${``, ``$VAR`` or a backtick
+        span).
+    There is no per-spelling fit test: a literal ``169.254.169`` prefix plus any
+    expansion in the final octet is treated as IMDS, which blocks every decimal /
+    octal / hex / zero-padded spelling of ``.254`` with one check and deliberately
+    over-blocks any other expansion-built ``169.254.169.x`` address (no agent command
+    needs to build such an address from an expansion). An expansion in one of the
+    first three octets and an all-expansion version string are NOT IMDS-shaped and
+    are left alone; a purely literal token carries no sentinel and is left to the
+    canonicalizer path. Returns the denial reason -- naming the UNEXPANDED token,
+    never any expanded bytes -- or None.
+
+    Scope: the four-part dotted form ``169.254.169.<octet>`` with an expansion in the
+    final octet, per GHSA-x2m8-5ff9-f479. The 2-/3-part inet_aton short forms are
+    outside this check.
+    """
+    if "$" not in command and "`" not in command:
+        return None
+    for original, masked in _ip_expansion_tokens(command):
+        if _EXPANSION_SENTINEL not in masked:
+            continue  # a pure literal IP -- the canonicalizer path above owns it
+        octets = masked.split(".")
+        if len(octets) != 4:
+            continue
+        *prefix_octets, last = octets
+        # The expansion must sit in the LAST octet, and the first three must be
+        # literal: that pins the whole 169.254.169 prefix and keeps ordinary
+        # variable-built addresses (version strings, subnet gateways, link-local
+        # assignments) out of the gate.
+        if any(_EXPANSION_SENTINEL in part for part in prefix_octets):
+            continue
+        if _EXPANSION_SENTINEL not in last:
+            continue
+        if [_octet_literal_value(part) for part in prefix_octets] != list(_IMDS_OCTETS[:3]):
+            continue
+        return (
+            f"Blocked: command accesses IMDS endpoint "
+            f"(169.254.169.254 via shell expansion '{original}')"
+        )
+    return None
+
 
 def _check_imds_access(command: str, *, enabled_ids: "frozenset[str] | None" = None) -> str | None:
     """Detect attempts to access the IMDS endpoint via any encoding.
@@ -1476,10 +1694,12 @@ def _check_imds_access(command: str, *, enabled_ids: "frozenset[str] | None" = N
     """
     if enabled_ids is not None and "credential-exfil-imds-any" not in enabled_ids:
         return None
-    # Quick reject: no IP-like candidate in command
+    # Quick reject: no literal IP candidate. A token whose octets are ALL shell
+    # expansions (``$A.$B.$C.254``) still has no literal candidate, so the
+    # expansion check runs even on this path rather than short-circuiting None.
     candidates = _IP_CANDIDATE_RE.findall(command)
     if not candidates:
-        return None
+        return _imds_access_via_expansion(command)
 
     try:
         imds_v6: ipaddress.IPv6Address | None = ipaddress.ip_address(_IMDS_IPV6)  # type: ignore[assignment]
@@ -1506,7 +1726,8 @@ def _check_imds_access(command: str, *, enabled_ids: "frozenset[str] | None" = N
                     )
             except ValueError:
                 pass
-    return None
+    # No literal encoding matched; a per-octet shell-expansion spelling still can.
+    return _imds_access_via_expansion(command)
 
 
 # This module is the import path of every name the egress layer offers. The URL classifier,
