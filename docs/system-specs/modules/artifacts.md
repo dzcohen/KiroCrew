@@ -1626,8 +1626,16 @@ to this kind would store content no reader can parse.
   as a crewmate's Dashboard frame. A link in the page opens through the host:
   `buildSrcdoc({ linkBridge: true })` turns a `_blank` or bare web link click,
   and `window.open`, into a `kirocrew-dashboard:open` message, and
-  `useFrameLinkBridge` opens an absolute `http(s)` URL only after a click in
-  that frame and a confirm that shows the URL. The header also sets `connect-src 'none'`,
+  `useFrameLinkBridge` opens an absolute `http(s)` URL only on a real click in
+  that frame, once per click, with no dialog. The shim decides a click after
+  the page's own handlers, so a click the page cancels posts nothing. Within an
+  activation's lifespan (5 s) of a click or key in the dashboard itself, or in
+  another bridged frame (each shim reports its frame's input as
+  `kirocrew-dashboard:input`), the host waits that input out and opens only if
+  an activation is still live with the frame focused, so a page that focuses
+  its own frame cannot borrow the dashboard's or a sibling's click. Each web link gets its resolved URL
+  as a hover title, so the URL shows before the click, as it does for a link in a
+  session. The header also sets `connect-src 'none'`,
   `object-src 'none'`, `base-uri 'none'` and `form-action 'none'`, so a document
   cannot fetch, open a WebSocket or beacon to another host even without its own
   `<meta>` CSP. Every shipped caller's meta CSP already blocks the same channels,
@@ -1665,7 +1673,8 @@ to this kind would store content no reader can parse.
   host's injected scripts carry, so the height reporter and comment bridge run and
   a page script, inline handler or `javascript:` URL is refused whatever the
   crewmate's egress rules allow. Nothing else moves the frame either: host
-  listeners cancel every click and auxclick, so no link navigates, and the
+  listeners cancel every click and auxclick, so no link navigates, and it gets no
+  link bridge (`artifactFrame`'s `linkBridge: false`), so none opens either; the
   finished document is re-parsed as the frame will parse it, dropping each `meta`,
   `link`, `noscript` and declarative shadow root (`template[shadowrootmode]`) in
   its body until a parse finds none (three rounds, then only the host's scripts

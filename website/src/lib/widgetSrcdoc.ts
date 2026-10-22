@@ -9,8 +9,8 @@
 // or open a window of its own. Links open through the host instead: the
 // `linkBridge` option injects LINK_BRIDGE_SHIM_BODY, which hands a `_blank` or
 // bare web link click, and `window.open`, to the host's `useFrameLinkBridge`,
-// and the host opens the URL after a click in that frame and a confirm that
-// shows it. Callers that do not set `linkBridge` (an exported copy, the mochi
+// gives each web link its URL as a hover title, and the host opens the URL after
+// a real click in that frame. Callers that do not set `linkBridge` (an exported copy, the mochi
 // pet frame) keep EXTERNAL_LINK_TARGET_SHIM_BODY or opt out of it with
 // `rewriteBareLinks: false`.
 //
@@ -55,6 +55,17 @@ import { sanitizeCssValue } from './cssSanitize'
  * link bridge (`linkBridge` here, `useFrameLinkBridge` in the host). Mirrored by
  * the `/sandbox-doc/` response header in `dashboard/handlers/sandbox_doc.py`. */
 export const AGENT_PAGE_SANDBOX = 'allow-scripts'
+
+/** How long a click or key press stays a live user activation: 5 s in Chromium,
+ * and so in the desktop app. The link bridges wait this long after
+ * another's input, plus ACTIVATION_SETTLE_MS, before trusting a live
+ * activation to be a click in the frame. The input's time is read in its own
+ * listener, after the browser has already stamped the activation, so the wait
+ * never ends early; the settle only covers timer and clock rounding, and is
+ * kept far below any human second press (a Tab then Enter). */
+export const ACTIVATION_LIFESPAN_MS = 5000
+export const ACTIVATION_SETTLE_MS = 20
+
 
 /** CSS custom properties the parent app exposes to widgets. Resolved against
  * document.documentElement and serialized into the sandboxed srcdoc so widget
@@ -692,9 +703,11 @@ const EXTERNAL_LINK_TARGET_SHIM_BODY = `(function(){
  * Those frames are `sandbox="allow-scripts"` with no popup grant, so a page
  * cannot open a window itself; this hands the request to the host instead, as
  * `{type: 'kirocrew-dashboard:open', url}` -- the message the crew pages already
- * post. The host (`useFrameLinkBridge`) opens it only for a web URL, only right
- * after a click in this frame, and only once the person confirms the URL.
+ * post. The host (`useFrameLinkBridge`) opens it only for a web URL and only right
+ * after a real click in this frame, once per click.
  *
+ *   - A middle-click on a web link is handled the same way (it asks for a new
+ *     tab whatever the target).
  *   - A click on a link that would open a window (`target="_blank"` or any other
  *     target but `_self`) or that would navigate this frame to another site (a
  *     bare absolute `http(s)` link) is cancelled here and, when its href is an
@@ -705,16 +718,31 @@ const EXTERNAL_LINK_TARGET_SHIM_BODY = `(function(){
  *     that opens from script reaches the host too.
  *   - `data-action` anchors are the composer pre-fill buttons; their own handler
  *     owns them, so they are skipped.
+ *   - Each click or key in the frame is reported as
+ *     `{type: 'kirocrew-dashboard:input'}`, so the host can hold a SIBLING
+ *     frame's open request until that input's activation has expired.
  *
- * Registered on `window` in the capture phase before the page's own script runs,
- * so it fires first. Does nothing when the document has no parent (a downloaded
+ * A click is decided on `window` as it bubbles, after the page's own handlers, so
+ * a page that cancels a link click keeps that and nothing is posted; a capture
+ * listener, registered before the page's script runs, only turns a bare web link
+ * into a window-opening one first, so a page that stops the click cannot let it
+ * navigate this frame away. Does nothing when the document has no parent (a downloaded
  * copy opened as a file, a document opened top-level), where ordinary links work.
- * Not a security boundary on its own: any page script can post the same message,
- * which is why the host checks the gesture and asks before opening.
+ * A web link without a title gets its resolved URL as one on hover or focus, so
+ * the URL shows before a click. Not a security boundary on its own: any page
+ * script can post the same message, which is why the host checks the frame, the
+ * URL and the gesture before opening.
  */
 const LINK_BRIDGE_SHIM_BODY = `(function(){
   if (window.parent === window) return;
   var T = 'kirocrew-dashboard:open';
+  var P = window.parent;
+  // Each click or key here is reported, so the host can tell that a live
+  // activation may be this frame's when a sibling frame asks to open a link.
+  function input(){ try { P.postMessage({ type: 'kirocrew-dashboard:input' }, '*'); } catch (_) {} }
+  ['keydown', 'mousedown', 'pointerdown', 'pointerup', 'touchend'].forEach(function(t){
+    window.addEventListener(t, input, { capture: true, passive: true });
+  });
   function web(raw){
     var u;
     try { u = new URL(String(raw)); } catch (_) { return null; }
@@ -723,24 +751,74 @@ const LINK_BRIDGE_SHIM_BODY = `(function(){
   function ask(raw){
     var url = web(raw);
     if (!url) return;
-    try { parent.postMessage({ type: T, url: url }, '*'); } catch (_) {}
+    try { P.postMessage({ type: T, url: url }, '*'); } catch (_) {}
   }
-  window.addEventListener('click', function(e){
-    var path = typeof e.composedPath === 'function' ? e.composedPath() : null;
-    var t = (path && path.length) ? path[0] : e.target;
-    if (!t || typeof t.closest !== 'function') return;
-    var a = t.closest('a[href],area[href]');
-    if (!a || a.closest('[data-action]')) return;
+  function linkOf(e){
+    // The composed path crosses shadow roots, so a link that wraps a custom
+    // element's shadow content is still found; closest() alone stops at the root.
+    var path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
+    for (var i = 0; i < path.length; i++) {
+      var n = path[i];
+      if (n && n.nodeType === 1 && (n.localName === 'a' || n.localName === 'area') && n.hasAttribute('href')) return n;
+    }
+    return null;
+  }
+  // What a link event would do here: null to leave it to the frame, else the
+  // link, the URL to post (null for a non-web scheme) and whether it is bare.
+  function planOf(e, middle){
+    var a = linkOf(e);
+    if (!a || (typeof a.closest === 'function' && a.closest('[data-action]'))) return null;
     var target = (a.getAttribute('target') || '').trim().toLowerCase();
     var url = web(a.getAttribute('href') || '');
-    if (target === '_self') return;
-    if (!target && !url) return;
-    e.preventDefault();
-    if (url) ask(url);
+    if (!middle && target === '_self') return null;
+    if (!middle && !target && !url) return null;
+    if (middle && !url) return null;
+    return { a: a, url: url, bare: !middle && !target };
+  }
+  // A click is decided after the page's own handlers, so a page that cancels it
+  // (an in-page panel, onclick="return false") keeps that: nothing is posted.
+  // The capture half only makes a bare web link window-opening, so a page that
+  // stops the click before it reaches window cannot navigate this frame away
+  // (the sandbox refuses the window).
+  var pending = null;
+  window.addEventListener('click', function(e){
+    pending = null;
+    var p = planOf(e, false);
+    if (!p) return;
+    pending = { e: e, url: p.url };
+    if (p.bare) { p.a.setAttribute('target', '_blank'); p.a.setAttribute('rel', 'noopener noreferrer'); }
   }, true);
-  var open = function(u){ ask(u); return null; };
-  try { Object.defineProperty(window, 'open', { value: open, configurable: false, writable: false }); }
-  catch (_) { try { window.open = open; } catch (_e) {} }
+  window.addEventListener('click', function(e){
+    var p = pending;
+    pending = null;
+    if (!p || p.e !== e || e.defaultPrevented) return;
+    e.preventDefault();
+    if (p.url) ask(p.url);
+  });
+  // Hover shows where a link goes, as in a session: a web link without a title
+  // gets its resolved URL as one. Some hosts (the desktop app) show no status
+  // bar for a framed link, so the title is the only place the URL appears.
+  function titleLink(e){
+    var a = linkOf(e);
+    if (!a || a.hasAttribute('title')) return;
+    var url = web(a.getAttribute('href') || '');
+    if (url) a.setAttribute('title', url);
+  }
+  window.addEventListener('mouseover', titleLink, true);
+  window.addEventListener('focusin', titleLink, true);
+  // A middle-click asks for a new tab whatever the target, which the frame cannot open.
+  // Decided after the page's handlers too; the frame cannot open a tab itself.
+  window.addEventListener('auxclick', function(e){
+    if (e.button !== 1 || e.defaultPrevented) return;
+    var p = planOf(e, true);
+    if (!p) return;
+    e.preventDefault();
+    ask(p.url);
+  });
+  // A plain assignment, not a locked property: a page script that declares its
+  // own top-level open (function or const) must still run. The sandbox already
+  // refuses a native popup, and the host checks every request.
+  try { window.open = function(u){ ask(u); return null; }; } catch (_) {}
 })();`
 
 /** The host half of the link bridge for a widget popped out into its own tab
@@ -748,35 +826,60 @@ const LINK_BRIDGE_SHIM_BODY = `(function(){
  * writes, holding the widget in an `AGENT_PAGE_SANDBOX` frame, so React and
  * `useFrameLinkBridge` are not there to answer the frame's open message. This
  * script is: the same checks (the message comes from the frame, the URL is an
- * absolute `http(s)` URL with no user name or password and at most 2048
- * characters, the person just clicked in the frame), then the browser's own
- * confirm showing the URL, then a `noopener,noreferrer` open. `__PROMPT__` is
- * replaced by `popoutLinkBridgeScript` with the localized question. */
+ * absolute `http(s)` URL with no user name or password, the person just clicked in
+ * the frame, and the activation cannot be the tab's own input), then a
+ * `noopener,noreferrer` open, once per click. */
 const POPOUT_LINK_BRIDGE_BODY = `(function(){
   var T = 'kirocrew-dashboard:open';
-  var PROMPT = __PROMPT__;
+  var LIFE = ${ACTIVATION_LIFESPAN_MS}, SETTLE = ${ACTIVATION_SETTLE_MS};
+  // The tab's own clicks and keys (a Tab into the frame), never the frame's: a
+  // live activation from one of them must not open what the frame asks for.
+  // This script runs as the tab loads, before any input in it.
+  var last = -Infinity, waiting = false;
+  ['keydown', 'mousedown', 'pointerdown', 'pointerup', 'touchend'].forEach(function(t){
+    window.addEventListener(t, function(){ last = Date.now(); }, true);
+  });
+  function clicked(){
+    var f = document.querySelector('iframe');
+    var ua = navigator.userActivation;
+    return f && ua && ua.isActive && document.activeElement === f ? f : null;
+  }
+  function go(f, href){
+    // Once per click: focus leaves the frame, so a frame posting again from the
+    // same click fails the focus check until the next real click.
+    try { f.blur(); } catch (_) {}
+    window.open(href, '_blank', 'noopener,noreferrer');
+  }
   window.addEventListener('message', function(e){
     var f = document.querySelector('iframe');
     if (!f || !e.source || e.source !== f.contentWindow) return;
     var d = e.data;
     if (!d || typeof d !== 'object' || d.type !== T || typeof d.url !== 'string') return;
-    if (!d.url || d.url.length > 2048) return;
+    if (!d.url) return;
     var u;
     try { u = new URL(d.url); } catch (_) { return; }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
     if (u.username || u.password) return;
-    var ua = navigator.userActivation;
-    if (!ua || !ua.isActive || document.activeElement !== f) return;
-    if (window.confirm(PROMPT + '\\n\\n' + u.href)) window.open(u.href, '_blank', 'noopener,noreferrer');
+    if (!clicked()) return;
+    var wait = last + LIFE + SETTLE - Date.now();
+    if (!(wait > 0)) { go(f, u.href); return; }
+    // The activation may still be the tab's own input. Ask again once that has
+    // expired: still live then means a click or key in the frame.
+    if (waiting) return;
+    waiting = true;
+    var seen = last;
+    setTimeout(function(){
+      waiting = false;
+      var g = clicked();
+      if (g && last === seen) go(g, u.href);
+    }, wait);
   });
 })();`
 
-/** The popped-out widget tab's link bridge, with `prompt` as the confirm's
- * question. The prompt is JSON-encoded with `<` escaped, so no string can close
- * the script element it is written into. */
-export function popoutLinkBridgeScript(prompt: string): string {
-  const literal = JSON.stringify(prompt).replace(/</g, '\\u003c')
-  return POPOUT_LINK_BRIDGE_BODY.replace('__PROMPT__', () => literal)
+/** The popped-out widget tab's link bridge: fixed first-party text, no widget
+ * content. */
+export function popoutLinkBridgeScript(): string {
+  return POPOUT_LINK_BRIDGE_BODY
 }
 
 /** In-iframe comment bridge. Vanilla JS string — no LLM/user
