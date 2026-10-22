@@ -21,11 +21,16 @@ on:
 
 # Re-run the affected reviewer workflows, dispatch PR Readiness, and record the
 # trusted decision. PR-write is required because the trusted
-# record is a pull-request comment. Deliberately no id-token or contents:write.
+# record is a pull-request comment. issues: read is for class `deferred`, which
+# reads the follow-up issue it names: a scope not listed here is `none`, so
+# without it every deferred override would fail the read three times and be
+# refused as a retry. Deliberately no id-token or contents:write.
+# test_workflow_token_scopes.py derives the scopes from the calls below.
 permissions:
   actions: write
   checks: write
   contents: read
+  issues: read
   pull-requests: write
 
 concurrency:
@@ -83,7 +88,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.issue.number }}
-          ACTOR: ${{ github.event.comment.user.login }}
+          # The actor is the event's SENDER: whoever made this create or edit.
+          # An edit made by someone other than the comment's author must not be
+          # judged as the author's, so the two are compared below.
+          ACTOR: ${{ github.event.sender.login }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           RELEASE_RECORD: ${{ runner.temp }}/release_record.py
@@ -95,6 +104,16 @@ jobs:
               | gh api --method POST "repos/$REPO/issues/$PR/comments" \
                   --input - >/dev/null
           }
+
+          # A create is always the author's own act. An EDIT can be made by
+          # anyone with edit rights on the comment, and the permission check
+          # and the record below would then bind the edit to the wrong person.
+          # Refuse it; the author, or the person who means it, posts the
+          # command themselves.
+          if [ -z "$ACTOR" ] || [ "${ACTOR,,}" != "${COMMENT_AUTHOR,,}" ]; then
+            post_notice "AI-review override not recorded: this comment was changed by @$ACTOR, not by its author @$COMMENT_AUTHOR. Post the command as a new comment from the person who is releasing."
+            exit 1
+          fi
 
           # The grammar, the class table and every per-class requirement are
           # release_record.py's. COMMENT_BODY reaches it on env, never in argv.
