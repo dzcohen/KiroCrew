@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { RootState } from '../store'
 import { agentOrDefaultLabel } from '../utils/agentLabel'
+import { sessionDisplayTitle } from '../utils/sessionDisplayTitle'
 import { defaultAgentQuery } from '../api/defaultAgentQuery'
 import { recencyEpoch } from '../components/commandPalette/providers/recentsProvider'
 
@@ -49,7 +50,7 @@ export function useAgentSync() {
   const slotAgents = useMemo<AgentSource[]>(() => [...slots]
     .sort((a, b) => recencyEpoch(b) - recencyEpoch(a))
     .map(sl => ({
-    id: 'slot-' + sl.key, name: shortName(sl.title || sl.key),
+    id: 'slot-' + sl.key, name: shortName(sessionDisplayTitle(sl)),
     label: agentOrDefaultLabel(sl.agent, defaultAgent, sl.agent_kind), kind: 'slot' as const,
     running: sl.running, detail: sl.messages + ' msgs',
     lastMessage: sl.last_message || '',

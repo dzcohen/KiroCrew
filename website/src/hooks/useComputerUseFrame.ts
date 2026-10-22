@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { useAppSelector } from '../store'
+import { sessionDisplayTitle } from '../utils/sessionDisplayTitle'
 
 /**
  * Shape of the `kirocrew-computer-use-frame` CustomEvent detail. Mirrors the WS
@@ -76,7 +77,11 @@ export function useComputerUseFrame(): ComputerUseFrameState {
   // already in the trusted store and never crosses the frame payload.
   const slots = useAppSelector(s => s.dashboard.slots)
   const sessionName = useMemo(
-    () => (sessionKey ? slots.find(s => s.key === sessionKey)?.title || null : null),
+    () => {
+      // An untitled driver (its stored title can be the key) reads "Untitled session".
+      const slot = sessionKey ? slots.find(s => s.key === sessionKey) : undefined
+      return slot ? sessionDisplayTitle(slot) : null
+    },
     [slots, sessionKey],
   )
 

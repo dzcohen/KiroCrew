@@ -308,7 +308,7 @@ describe('PromptsTab slot picker', () => {
     return ctx
   }
 
-  it('labels each slot by title, then agent, then key — and dots the running one', async () => {
+  it('labels each slot by title, then agent, then "Untitled session" — and dots the running one', async () => {
     await openPicker([
       slot({ key: 'a', title: 'Alpha session', running: true }),
       slot({ key: 'b', title: 'b', agent: 'researcher' }),
@@ -317,8 +317,9 @@ describe('PromptsTab slot picker', () => {
     expect(screen.getByRole('button', { name: 'Alpha session' })).toBeInTheDocument()
     // title === key is treated as no title, so the agent name wins.
     expect(screen.getByRole('button', { name: 'researcher' })).toBeInTheDocument()
-    // No title and no agent leaves the raw key.
-    expect(screen.getByRole('button', { name: 'c' })).toBeInTheDocument()
+    // No title and no agent reads "Untitled session", never the raw key (#23084).
+    expect(screen.getByRole('button', { name: 'Untitled session' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'c' })).toBeNull()
   })
 
   it('says so when there is no chat to send to', async () => {

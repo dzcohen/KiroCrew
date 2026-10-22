@@ -86,6 +86,17 @@ describe('ComputerUseLiveView', () => {
     expect(screen.getByText('· Desktop triage')).toBeInTheDocument()
   })
 
+  it('labels an untitled driving session "Untitled session", never its key (#23084)', async () => {
+    // The stored title of an untitled session can equal its key.
+    const store = createTestStore()
+    store.dispatch(sseSlots([{ key: 'chat-9-1785440411', title: 'chat-9-1785440411' }] as never))
+    renderWithProviders(<ComputerUseLiveView />, { store })
+    await act(async () => { pushFrame('QUJD', { session_key: 'chat-9-1785440411' }) })
+    await screen.findByRole('dialog')
+    expect(screen.getByText('· Untitled session')).toBeInTheDocument()
+    expect(screen.queryByText(/chat-9-1785440411/)).toBeNull()
+  })
+
   it('omits the session label for an unknown session key', async () => {
     renderWithProviders(<ComputerUseLiveView />)
     await act(async () => { pushFrame('QUJD', { session_key: 'not-in-store' }) })

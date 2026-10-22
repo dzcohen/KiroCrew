@@ -13,6 +13,7 @@ import ErrorNotice from '../../components/ErrorNotice'
 import ListDetailBack from '../../components/ListDetailBack'
 import { useSidePanelLeaveGuard } from '../../components/SidePanelLayout'
 import { parseErrorCode, findReport, type ErrorReport } from '../../utils/errorReport'
+import { isUntitledSession, sessionDisplayTitle } from '../../utils/sessionDisplayTitle'
 import { useListDetailView } from '../../hooks/useListDetailView'
 import { useProvider } from '../../providers'
 
@@ -63,7 +64,7 @@ function SlotPicker({ prompt, onClose }: { prompt: Prompt; onClose: () => void }
       {slots.map(s => (
         <div key={s.key} role="button" tabIndex={0} className="px-2 py-1.5 mx-1 rounded-md cursor-pointer text-[13px] hover:bg-bg-hover transition-colors flex items-center gap-2" onClick={() => send(s.key)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); send(s.key) } }}>
           {s.running && <span className="w-1.5 h-1.5 rounded-full bg-ok shrink-0" />}
-          <span className="truncate">{s.title && s.title !== s.key ? s.title : s.agent || s.key}</span>
+          <span className="truncate">{isUntitledSession(s) ? s.agent || sessionDisplayTitle(s) : s.title}</span>
         </div>
       ))}
       {slots.length === 0 && <div className="px-3 py-1.5 text-[12px] text-muted italic">{i18nT('pages.overview.promptsTab.no_active_chats')}</div>}
