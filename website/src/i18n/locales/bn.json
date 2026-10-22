@@ -12933,6 +12933,8 @@
       "kind_ruling": "সিদ্ধান্ত বাকি",
       "kind_stale": "থেমে আছে",
       "kind_orphaned": "অভিভাবকহীন",
+      "report_undelivered": "রিপোর্ট পাঠাতে পারেনি",
+      "brief_undelivered": "ব্রিফ পড়তে পারেনি",
       "no_report": "কোনো প্রতিবেদন নেই",
       "role_worker": "ওয়ার্কার",
       "role_conductor": "কন্डাক্টর",

@@ -1102,7 +1102,9 @@ from kiro_crew.work_ledger_store import (  # noqa: E402, F401
     _ITEMS_DIR,
     _KEY_FILE,
     _LOCK_FILE,
+    _UNDELIVERED_DIR,
     DIRTY_FILE,
+    RESERVED_ROOT_DIRS,
     _append_event_locked,
     _coalesce_progress,
     _commit_item_locked,
@@ -1136,6 +1138,15 @@ from kiro_crew.work_ledger_store import (  # noqa: E402, F401
     read_conductor,
     read_events,
     read_work_item,
+    undelivered_dir,
+    undelivered_path,
+)
+from kiro_crew.work_ledger_undelivered import (  # noqa: E402, F401
+    WORKER_TOOLS,
+    _undelivered_stamp,
+    clear_undelivered,
+    note_undelivered,
+    read_undelivered,
 )
 from kiro_crew.work_ledger_writes import (  # noqa: E402, F401
     _create_item,
@@ -1162,6 +1173,7 @@ _OWNERS = (
     "kiro_crew.work_ledger_rules",
     "kiro_crew.work_ledger_writes",
     "kiro_crew.work_ledger_purge",
+    "kiro_crew.work_ledger_undelivered",
 )
 for _owner in _OWNERS:
     _importlib.import_module(_owner)
@@ -1184,6 +1196,7 @@ if TYPE_CHECKING:  # the project names this module imported that only its owners
     from kiro_crew.session_ledger import (  # noqa: F401
         _store_name,
         is_link,
+        ledger_key,
         require_lock_inode,
         resolved_within,
         unlink_lock_in_hold,

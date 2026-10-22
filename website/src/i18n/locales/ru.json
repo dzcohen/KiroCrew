@@ -13367,6 +13367,8 @@
       "kind_ruling": "нужно решение",
       "kind_stale": "без движения",
       "kind_orphaned": "без владельца",
+      "report_undelivered": "не смог отправить отчёт",
+      "brief_undelivered": "не смог прочитать задание",
       "no_report": "нет отчёта",
       "role_worker": "воркер",
       "role_conductor": "дирижёр",

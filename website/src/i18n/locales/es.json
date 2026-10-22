@@ -13150,6 +13150,8 @@
       "kind_ruling": "necesita decisión",
       "kind_stale": "inactivo",
       "kind_orphaned": "huérfano",
+      "report_undelivered": "no pudo enviar su informe",
+      "brief_undelivered": "no pudo leer su encargo",
       "no_report": "sin informe",
       "role_worker": "worker",
       "role_conductor": "conductor",

@@ -62,6 +62,13 @@ DIRTY_FILE = _DIRTY_FILE
 _LOCK_FILE = ".lock"
 _ITEMS_DIR = "items"
 _BINDINGS_DIR = "bindings"
+#: Per-worker records of a worker-tool call the harness never delivered
+#: (:mod:`kiro_crew.work_ledger_undelivered`). Not a ledger: a gateway observation
+#: kept beside it.
+_UNDELIVERED_DIR = "undelivered"
+#: The directories under the work-ledger root that are NOT a conductor's store, so a
+#: sweep or a purge walking the root must step over them.
+RESERVED_ROOT_DIRS: frozenset[str] = frozenset({_BINDINGS_DIR, _UNDELIVERED_DIR})
 
 
 def mint_item_id() -> str:
@@ -153,6 +160,25 @@ def binding_path(worker_slot_key: str) -> Path:
             f"invalid worker slot key: {worker_slot_key!r}", code=CODE_INVALID_VALUE
         )
     resolved = resolved_within(bindings_dir(), f"{_store_name(worker_slot_key)}.json")
+    if resolved is None:
+        raise WorkLedgerError(
+            f"path traversal blocked for worker key: {worker_slot_key!r}",
+            code=CODE_INVALID_VALUE,
+        )
+    return resolved
+
+
+def undelivered_dir() -> Path:
+    return _work_ledger_root() / _UNDELIVERED_DIR
+
+
+def undelivered_path(worker_slot_key: str) -> Path:
+    """Where a worker's undelivered-call record lives, named like its binding."""
+    if not worker_slot_key or "\0" in worker_slot_key:
+        raise WorkLedgerError(
+            f"invalid worker slot key: {worker_slot_key!r}", code=CODE_INVALID_VALUE
+        )
+    resolved = resolved_within(undelivered_dir(), f"{_store_name(worker_slot_key)}.json")
     if resolved is None:
         raise WorkLedgerError(
             f"path traversal blocked for worker key: {worker_slot_key!r}",

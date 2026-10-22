@@ -1779,6 +1779,42 @@ async def test_a_compact_read_shows_a_stale_worker(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_report_the_harness_never_delivered_shows_on_both_reads():
+    """A worker whose ``work_report`` failed undelivered is not a silent stall: the
+    full and the compact read both carry ``report_undelivered`` for its item, the
+    other conductor's item carries none, and a report that then lands clears it."""
+
+    ids = await two_by_two()
+    assert wl.note_undelivered(WORKER_A, "work_report") is not None
+    _, full = await _read(CONDUCTOR_A)
+    row = next(r for r in full["items"] if r["item_id"] == ids["item_a"])
+    assert row["report_undelivered"]["tool"] == "work_report"
+    _, compact = await _read_with(CONDUCTOR_A, "compact=true")
+    assert compact["items"][0]["report_undelivered"] == row["report_undelivered"]
+    _, other = await _read(CONDUCTOR_B)
+    assert other["items"][0]["report_undelivered"] is None
+
+    status, _ = await _report(WORKER_A, {"status": "progress", "summary": "got through"})
+    assert status == 200
+    _, after = await _read(CONDUCTOR_A)
+    assert after["items"][0]["report_undelivered"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_brief_that_gets_through_clears_a_failed_brief():
+    """The block tells a worker to retry with the qualified name at once, so a
+    retried ``work_brief`` clears the flag without waiting for a report."""
+
+    ids = await two_by_two()
+    wl.note_undelivered(WORKER_A, "work_brief")
+    status, _ = await _brief(WORKER_A)
+    assert status == 200
+    _, after = await _read(CONDUCTOR_A)
+    row = next(r for r in after["items"] if r["item_id"] == ids["item_a"])
+    assert row["report_undelivered"] is None
+
+
+@pytest.mark.asyncio
 async def test_read_of_an_item_nested_too_deep_for_the_parser_answers(monkeypatch):
     """A 20 KB item file of ten thousand nested arrays is under the reader's ceiling
     and raises ``RecursionError`` from inside ``json.loads`` — before any fit. The

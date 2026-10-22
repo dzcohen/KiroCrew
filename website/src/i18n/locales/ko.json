@@ -12716,6 +12716,8 @@
       "kind_ruling": "결정 대기",
       "kind_stale": "정지",
       "kind_orphaned": "담당 없음",
+      "report_undelivered": "보고를 보내지 못함",
+      "brief_undelivered": "지시를 읽지 못함",
       "no_report": "보고 없음",
       "role_worker": "워여",
       "role_conductor": "지휘자",

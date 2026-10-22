@@ -68,6 +68,10 @@ _REPORT_KEY = "report"
 #: Prefix for a silence wake's dedupe key.
 _STALL_KEY = "stall"
 
+#: Prefix for an undelivered-report wake's dedupe key
+#: (:mod:`kiro_crew.work_ledger_undelivered`).
+_UNDELIVERED_KEY = "undelivered"
+
 #: The one terminal item state that means the item's bar was MET. The other two
 #: (``rejected``, ``abandoned``) close an item without meeting it, so a ledger is
 #: only a success when every item ended in THIS state. Pinned against
@@ -334,6 +338,25 @@ class WorkLedgerProbe(irq.Probe):
                     irq.ResetsOn.NEVER,
                 )
             )
+
+        undelivered = work_ledger.read_undelivered(conductor_key, item)
+        if undelivered is not None:
+            # The worker tried to report and the harness never delivered the call, so
+            # there is no report event to wake on and the silence would otherwise read
+            # as a stall. Keyed on the failed call's own stamp: a second failure later
+            # is news, a re-read of the same one is not.
+            token = f"{_UNDELIVERED_KEY}:{undelivered['at']}"
+            if self._spend(conductor_key, item.item_id, token, replaces=f"{_UNDELIVERED_KEY}:"):
+                found.append(
+                    irq.Observation(
+                        f"{_UNDELIVERED_KEY}:{item.item_id}:{undelivered['at']}",
+                        irq.Severity.WAKE,
+                        ledger_wake.undelivered_wake_brief(
+                            item_id=item.item_id, tool=undelivered["tool"]
+                        ),
+                        irq.ResetsOn.NEVER,
+                    )
+                )
 
         if work_ledger.is_stale(
             item,

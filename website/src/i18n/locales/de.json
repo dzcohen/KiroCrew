@@ -12933,6 +12933,8 @@
       "kind_ruling": "Entscheidung nötig",
       "kind_stale": "inaktiv",
       "kind_orphaned": "verwaist",
+      "report_undelivered": "konnte seine Meldung nicht senden",
+      "brief_undelivered": "konnte seinen Auftrag nicht lesen",
       "no_report": "keine Meldung",
       "role_worker": "Worker",
       "role_conductor": "Conductor",

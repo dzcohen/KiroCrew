@@ -13150,6 +13150,8 @@
       "kind_ruling": "precisa de decisão",
       "kind_stale": "parado",
       "kind_orphaned": "órfão",
+      "report_undelivered": "não conseguiu enviar o relatório",
+      "brief_undelivered": "não conseguiu ler a tarefa",
       "no_report": "sem relato",
       "role_worker": "worker",
       "role_conductor": "maestro",

@@ -12933,6 +12933,8 @@
       "kind_ruling": "निर्णय बाकी",
       "kind_stale": "ठहरा हुआ",
       "kind_orphaned": "अनाथ",
+      "report_undelivered": "रिपोर्ट नहीं भेज सका",
+      "brief_undelivered": "ब्रीफ़ नहीं पढ़ सका",
       "no_report": "कोई रिपोर्ट नहीं",
       "role_worker": "वर्कर",
       "role_conductor": "कंडक्टर",

@@ -12716,6 +12716,8 @@
       "kind_ruling": "待决定",
       "kind_stale": "已停滞",
       "kind_orphaned": "无人接管",
+      "report_undelivered": "无法发送报告",
+      "brief_undelivered": "无法读取任务说明",
       "no_report": "尚无汇报",
       "role_worker": "worker",
       "role_conductor": "调度者",

@@ -267,6 +267,25 @@ describe('CrewBoardPage', () => {
     expect(screen.getByText(/no acceptance criteria/i)).toBeTruthy()
   })
 
+  it('says a worker could not send its report, or read its brief', async () => {
+    await mount(board({
+      items: [
+        item({
+          item_id: 'it_r', title: 'tried to report',
+          report_undelivered: { tool: 'work_report', at: '2026-09-22T10:01:00+00:00' },
+        }),
+        item({
+          item_id: 'it_b', title: 'tried to read',
+          report_undelivered: { tool: 'work_brief', at: '2026-09-22T10:02:00+00:00' },
+        }),
+        item({ item_id: 'it_ok', title: 'reported fine', report_undelivered: null }),
+      ],
+    }))
+    expect(await screen.findByText('tried to report')).toBeTruthy()
+    expect(screen.getAllByText("couldn't send its report")).toHaveLength(1)
+    expect(screen.getAllByText("couldn't read its brief")).toHaveLength(1)
+  })
+
   it('shows the conductor goal and an event count that expands', async () => {
     await mount(board({
       items: [

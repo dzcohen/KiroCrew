@@ -324,6 +324,13 @@ function ItemRow({
               <StatusBadge role={i18nT('pages.crewBoard.role_conductor')}>{item.verdict}</StatusBadge>
             ) : null}
             {item.stale ? <StatusBadge tone="warn">{i18nT('pages.crewBoard.kind_stale')}</StatusBadge> : null}
+            {item.report_undelivered && !item.terminal ? (
+              <StatusBadge tone="warn">
+                {item.report_undelivered.tool === 'work_brief'
+                  ? i18nT('pages.crewBoard.brief_undelivered')
+                  : i18nT('pages.crewBoard.report_undelivered')}
+              </StatusBadge>
+            ) : null}
             {!item.acceptance_concrete && !item.terminal ? (
               <StatusBadge tone="warn">{i18nT('pages.crewBoard.bar_vague')}</StatusBadge>
             ) : null}

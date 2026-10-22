@@ -12716,6 +12716,8 @@
       "kind_ruling": "判断待ち",
       "kind_stale": "停滞",
       "kind_orphaned": "担当不在",
+      "report_undelivered": "報告を送信できませんでした",
+      "brief_undelivered": "指示を読み込めませんでした",
       "no_report": "報告なし",
       "role_worker": "ワーカー",
       "role_conductor": "コンドクター",
