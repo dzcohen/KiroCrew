@@ -20,6 +20,7 @@ import { releaseCloseHold, awaitCloseOutcome, expireCloseHold, confirmCloseHold,
 import { isChatPageSurface } from '../utils/channelOrigin'
 import { isNoteRow } from '../lib/noteContract'
 import { gcSessionStorage } from '../utils/storageGc'
+import { sessionDisplayTitle } from '../utils/sessionDisplayTitle'
 import type { RootState } from './index'
 import type { ChatMessage, TurnIdentityFields } from '../types'
 import { SOFT_STOP_DEBOUNCE_MS } from '../pages/chat/types'
@@ -692,7 +693,7 @@ export const deleteSlot = createAsyncThunk<
       // The title is read from before the optimistic removal took the row away.
       dispatch({
         type: 'chat/setCloseRefused',
-        payload: { key, title: deletedSlot?.title || key, reason: closeRefusalIsHistoryWrite(err) ? 'historyWrite' : 'failed' },
+        payload: { key, title: deletedSlot ? sessionDisplayTitle({ key, title: deletedSlot.title }) : key, reason: closeRefusalIsHistoryWrite(err) ? 'historyWrite' : 'failed' },
       })
       throw new Error('save failed')
     } finally {

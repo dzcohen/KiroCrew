@@ -146,6 +146,20 @@ describe('refused single-session close', () => {
     expect(notice.textContent).toContain('“Release notes” is still saving its last turn.')
   })
 
+  it('an untitled session is named "Untitled session", never by its raw key (#23084)', async () => {
+    // The stored title of an untitled session can equal its key.
+    const defaults = createTestStore().getState()
+    const store = createTestStore({
+      dashboard: {
+        ...defaults.dashboard,
+        slots: [{ key: 'chat-untitled', title: 'chat-untitled', messages: 1, running: false }],
+      } as unknown as RootState['dashboard'],
+    })
+    mocks.deleteChatSlot.mockRejectedValue(historyWriteRefusal())
+    await store.dispatch(deleteSlot('chat-untitled')).catch(() => {})
+    expect(store.getState().chat.closeRefused).toMatchObject({ key: 'chat-untitled', title: 'Untitled session' })
+  })
+
   it('a close that succeeds says nothing', async () => {
     mocks.deleteChatSlot.mockResolvedValue({ ok: true })
     const { container, queryByTestId } = renderSidebar()
