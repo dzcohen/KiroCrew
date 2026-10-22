@@ -128,6 +128,15 @@ Telegram and dashboard paths. Three rules:
   became the default, and resolving it to the default would silently downgrade it
   to a lower-quality voice on upgrade.
 
+### Registered providers
+
+A composed edition can add TTS providers through the `speech` slot on `PlatformContext` (`SpeechProviderRegistry.tts_providers()`; see `platform-context.md`). The default registry adds none, so a standalone install has exactly `VALID_PROVIDERS`. `voice_reply.valid_providers()` is the built-ins plus the registered names.
+
+- **Collision rule.** A registered name may not be `polly`, `piper` or `system`, may not be blank and may not repeat. `speech_providers.validate_speech_registry` refuses any of these at boot with `PlatformCompositionError`, so an edition can add a provider but never replace one.
+- **Default precedence.** A stored provider always wins. Only an absent, null or empty value takes `voice_reply.default_provider()`: the edition's `default_tts()` when it names a selectable provider, else `DEFAULT_PROVIDER`. An invalid stored value still falls back to `DEFAULT_PROVIDER`, never to the edition default, for the same reason it never falls back to Polly.
+
+`GET /api/voice/config` serves the same `providers` list the STT config does (`stt-streaming.md` § "The capability `providers` list"): `name`, `label`, `builtin`, `available`, `reason`, `action`, `error`, built-ins first in `system`, `piper`, `polly` order. The Settings picker (`VoicePanel`) renders its options from it and falls back to its own `PROVIDER_OPTIONS` when the list is absent. A registered provider shows none of the built-in field sets; when it cannot run, `SpeechProviderNotice` shows its `reason` under the picker: through `ErrorNotice`, with the agent hand-off, when `error` says its check timed out or raised, and otherwise as status text with any sign-in hint.
+
 ## Components
 
 | Component | Code | Responsibility |

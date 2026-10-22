@@ -1405,9 +1405,33 @@ snapshot, so anything the user typed before speaking survives, and the caret doe
 not jump. The snapshot clears on the final, so the next utterance starts from the
 newly committed text.
 
+## Registered providers
+
+A composed edition can add STT providers through the `speech` slot on `PlatformContext` (`SpeechProviderRegistry.stt_providers()`; see `platform-context.md`). The default registry adds none, so a standalone install has exactly the built-in set.
+
+- **Collision rule.** A registered name may not be a built-in (`local`, `apple`, `transcribe`), a retired name or `off`, may not be blank and may not repeat. `speech_providers.validate_speech_registry` refuses any of these at boot with `PlatformCompositionError`, so an edition can add a provider but never replace one.
+- **Default precedence.** A stored `stt.provider` always wins. Only an absent key takes the edition's `default_stt()`, and only when that is `None` does it take core's `local`. An unusable stored value keeps its built-in fallback below, so a typo never reaches the edition default.
+- **Streaming.** A registered provider joins the streaming grant only when its `streaming` attribute is true. Positive membership stays the rule.
+
+### The capability `providers` list
+
+`GET /api/config/stt` serves `providers`, one entry per selectable provider, in `valid_stt_providers()` order: built-ins first in their usual order, then registered ones in registration order, with `off` last. Each entry is:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | The `stt.provider` value. |
+| `label` | string | Display label. The dashboard labels built-ins from its own catalog and shows this only for a registered provider. |
+| `builtin` | bool | Whether core ships it. |
+| `available` | bool | Whether it can run now, from the provider's `check()`. |
+| `reason` | string or null | Why it cannot run, in the provider's words. |
+| `action` | `{"kind": "login", "label": string}` or null | What the user can do. `login` names the account to sign in to. |
+| `error` | bool | True only when the provider's `check()` timed out or raised (`speech_providers.check_status`). False for a missing prerequisite such as a login or an install. |
+
+The Settings picker (`SttSettings`, through `lib/speechProviders.ts`) renders its options from this list. An unavailable registered provider stays selectable; while it is selected, `SpeechProviderNotice` shows its `reason` under the picker. An `error` row is a failure, so it renders through `ErrorNotice`, with the agent hand-off only while no AWS profile or region draft is unsaved. Any other row is status text, with a sign-in hint naming `action.label` for a `login` action. Built-ins keep the availability badge and messages above, so a standalone install shows no new text. An older gateway that serves bare names, or no list, still renders: bare names read as available built-ins, and no list falls back to `FALLBACK_PROVIDERS`.
+
 ## Legacy provider values
 
-`_validated_stt_provider` in `config/sections_stt.py` accepts `local`, `apple`, `transcribe`, and `off`. Two classes of stored value fall outside that set and degrade differently, each logging the replacement once per process rather than preventing the gateway from loading a voice setting:
+`_validated_stt_provider` in `config/sections_stt.py` accepts `local`, `apple`, `transcribe`, `off`, and any name an edition registered (see Registered providers). Two classes of stored value fall outside that set and degrade differently, each logging the replacement once per process rather than preventing the gateway from loading a voice setting:
 
 - Persisted `whisper`, `mlx`, `parakeet`, or `faster` (the retired names) degrade to `local`: each was a local recogniser the user had working, and the resident engine recognises the same speech.
 - Any other value degrades to `off`. An unknown value used to degrade to `local`, which put a typo or a guessed value onto the one provider that links a native library into the gateway; a user told to set `stt.provider off` while that library was crashing on model load got the crashing engine back, and learned it only from a WARNING line (kirodotdev/KiroCrew#13179). Failing closed is the one reading that cannot make things worse. `kirocrew config set stt.provider <value>` refuses a value outside the enum at the write, so a stored unknown value can only arrive from a hand edit or an older writer.
