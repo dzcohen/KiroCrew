@@ -3015,6 +3015,101 @@ Writers: `apps/registry_pipeline/sources.py` (`_effective_registries`,
 (`AppsLoader.default_registries`), `config/loader.py`
 (`ExternalRegistryConfig.trust`), `apps/routes_registry.py` (`handle_registries`).
 
+### 15.1 Registry default installs
+
+A registry can ship an app already installed, the way `_DEFAULT_ON_BUILTINS`
+ships a builtin already enabled. Two switches, held by two owners, must both be on:
+
+| Switch | Where | Owner |
+|---|---|---|
+| `"allowDefaultInstall": true` | the registry's `AppsLoader.default_registries()` row | the build |
+| `"defaultInstall": true` | the app's row in that registry's `app-registry.json` | the registry's reviewers |
+
+`"defaultEnabled": false` on the app row installs it disabled. Only a literal
+`true` turns either switch on. After the dashboard listener serves,
+`apps/default_installs.py::reconcile_default_installs` runs as a tracked
+background task. For each opted-in registry it fetches the index fresh, then
+installs each marked app whose name is not yet in
+`agent.apps_default_installs_applied`: `install_from_registry`, then activation
+the way `kirocrew app enable` does it. The pass calls `enable_app` (the guarded
+transition that applies the `apps` governance ceiling and the admission policy)
+and registers resources and starts the backend only when it succeeds. Like the
+CLI enable it runs no `onEnable` and leaves hook loading to the hook reconciler.
+Self-managed installs can arrive enabled. For `defaultEnabled: false`, pending
+session-approval consent, or a refused enable, the pass persists the disabled
+state through `disable_app` off-loop and verifies `enabled: false` by re-reading
+the app record before reporting success. A failed disable or an unverifiable
+disabled record fails the install and withdraws the grant the pass added even
+though the app landed, so the execution gate keeps it from running. An app
+awaiting session-approval consent also stays suspended. A verified disabled app
+is still marked handled, because the owner's decision is not an install failure.
+If `install_from_registry` reports failure after an app record lands, the pass
+also persists and verifies the disabled state, even for `defaultEnabled: true`:
+that record has not passed `enable_app`. The result stays `ok: false` with the
+original install error. The pass keeps its grant only when disable is verified;
+otherwise `must_not_run: true` withdraws the grant the pass added. The failed
+attempt stays unmarked, and the next boot hands the existing record off.
+
+Installing registry code needs an execution grant, so the pass records one on the
+operator's behalf. Every rule below exists because of that:
+
+- **The build opts a registry in, never `config.json`.** The registry must be
+  build-pinned, in force (not contested by an operator row) and at the `owner`
+  tier. `trust: owner` alone is not enough, because an edition may pin a
+  community registry at `owner` too (§15): `owner` says the index is under change
+  control, not that its listings may install themselves.
+- **The flag is read from a fresh fetch** (`_fetch_and_cache_external_registry`),
+  never from the index cache, which is agent-writable. A failed fetch installs
+  nothing from that registry and retries next boot.
+- **Install acts on the fresh row.** The row `get_registry_app` resolves must
+  carry that registry's `_registry` tag and the fresh row's exact clone
+  coordinates (`_install_coordinates`), so a same-named seed, catalog or operator
+  row that resolves first is refused, not installed. The install then receives the
+  fresh row itself (`install_from_registry(..., resolved_entry=...)`) instead of
+  looking the name up again, so nothing it executes (`detectInstalled`, the clone
+  coordinates) can be swapped in the cache between the check and the use.
+- **The grant is the consent dialog's grant.** `apps_trusted` plus
+  `apps_trusted_repositories[name]` bound to the normalized repository, so a later
+  repository change is refused at install and re-prompts like any other grant. A
+  builtin name is refused (a grant on it would be inherited by a later third-party
+  app of that name). An existing grant bound to a different repository is never
+  overwritten. When `config.local.json` owns a trust key a base grant would be
+  inert, so the grant writer (`_mutate_agent_config`) refuses up front with
+  `TrustSettingOverlayOwned`, nothing is written, and the pass returns
+  `grant_refused` for that app.
+- **One success, then hand off.** The name is added to
+  `agent.apps_default_installs_applied` after a successful install, or straight
+  away when the app is already installed (its enabled state and grant untouched).
+  A marked name is never handled again, so uninstalling or disabling sticks, and
+  removing `defaultInstall` later stops new installs without removing old ones. A
+  failed install withdraws only what the pass added (the repository binding, the
+  name grant unless the operator already held a legacy one, and it puts back a
+  local-source marker the grant removed) and leaves the name unmarked, so the
+  next boot retries. Two exceptions: an app that landed and then failed a later
+  step keeps its grant and is handed off as installed on the next boot, and a
+  shutdown mid-install still withdraws the grant before the task ends. The
+  per-boot cap of 32 counts only names not yet handled. The marker is not a
+  trust key, so it is written outside the trust-overlay refusal (same config
+  lock, file lock, corrupt-file refusal and cache invalidation): an operator
+  who keeps a grant in `config.local.json` still gets the app handed off.
+- **A corrupt `config.json` installs nothing.** The loader reads a corrupt file as
+  defaults, so the applied list looks empty. The grant write goes through
+  `update_config_locked`, which refuses a corrupt file, and install runs only after
+  that write.
+
+The marker lives in `config.json` rather than a new data-home file because it sits
+beside the grants it guards and inherits their disposition: sealed read-only
+against an in-sandbox shell (`sandbox._CREW_READONLY_LEAVES`), written only by the
+settings surfaces outside the seal. The field is read at point of use, so it needs
+no live applier. Completed, failed and refused installs are SEL-audited as
+`app_default_install`.
+
+Writers: `apps/default_installs.py`, `apps/registry_pipeline/install.py`
+(`install_from_registry`'s `resolved_entry`), `platform/interfaces_structural.py`
+(`AppsLoader.default_registries`, the `allowDefaultInstall` key),
+`config/sections_agent.py` (`apps_default_installs_applied`),
+`dashboard/server_runtime/app_platform.py` (`_kick_default_app_installs`).
+
 ## 16. Store guidance and product screenshots are manifest-owned
 
 An App detail page carries three different kinds of information and does not
