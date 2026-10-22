@@ -204,6 +204,24 @@ describe('LexicalComposerInput', () => {
     expect(screen.queryByTestId('paste-token-1')).not.toBeInTheDocument()
   })
 
+  // #23148: the Lexical composer (reached via Style Markdown While Typing) must
+  // expand a collapsed paste on double-click, matching the textarea composer.
+  it('expands a paste chip to its full text on double-click and drops the block', async () => {
+    render(<ControlledHost initial={`x${formatToken(block)}y`} initialBlocks={[block]} />)
+    fireEvent.doubleClick(screen.getByTestId('paste-token-1'))
+    await waitFor(() => expect(screen.getByTestId('value').textContent).toBe(`x${block.content}y`))
+    expect(screen.queryByTestId('paste-token-1')).not.toBeInTheDocument()
+    expect(screen.getByTestId('blocks')).toHaveTextContent('[]')
+  })
+
+  it('a single click on a paste chip still only selects it, never expands', async () => {
+    const user = userEvent.setup()
+    render(<ControlledHost initial={`x${formatToken(block)}y`} initialBlocks={[block]} />)
+    await user.click(screen.getByTestId('paste-token-1'))
+    expect(screen.getByTestId('paste-token-1')).toBeInTheDocument()
+    expect(screen.getByTestId('value').textContent).toBe(`x${formatToken(block)}y`)
+  })
+
   // #18186: the Lexical composer must delete a staged @mention as one atomic
   // unit, matching the textarea composer (#17929). The editor hands the flat
   // text + flat selection to the shared `onMentionKey` handler (mentionKeyEdit)
